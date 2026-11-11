@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Image from 'next/image';
+import { GmcLogo } from '@/components/GmcLogo';
 import { Canvas } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { CameraControlsImpl } from '@react-three/drei';
@@ -15,7 +15,7 @@ import { HoloVision } from './HoloVision';
 import { HoloAvatar } from './HoloAvatar';
 import { HoloWelcome } from './HoloWelcome';
 import { HoloSouvenir } from './HoloSouvenir';
-import { PlaceGlyph } from './PlaceGlyph';
+import { LocationIcon, PlaceGlyph } from './PlaceGlyph';
 import { HoloMasterplan, emptyPlanState, type PlanUIState } from './HoloMasterplan';
 import styles from './map.module.css';
 
@@ -113,8 +113,8 @@ export default function VenueMap() {
       // The masterplan model is wide, so it gets a little more distance.
       const wideModel = place.feature === 'masterplan';
       // Aim below the model so it sits in the upper half, clear of the bottom card.
-      const ty = wideModel ? top - (aspect >= 1 ? 2.6 : 0.6) : top * 0.5;
-      const d = (aspect >= 1 ? 1.15 : 1.25) * (wideModel ? (aspect >= 1 ? 1.0 : 1.2) : 1);
+      const ty = wideModel ? top - (aspect >= 1 ? 2.6 : 1.4) : top * 0.5;
+      const d = (aspect >= 1 ? 1.15 : 1.25) * (wideModel ? (aspect >= 1 ? 1.0 : 1.05) : 1);
       if (view === 'top') c.setLookAt(tx, 40 * d * k, hz + 0.01, tx, 0, hz, true);
       else c.setLookAt(tx + 9 * d * k, ty + 13 * d * k, hz + 20 * d * k, tx, ty, hz, true);
       return;
@@ -179,6 +179,7 @@ export default function VenueMap() {
   }, [toast]);
 
   const switchView = (mode: View) => {
+    if (holoOn) return;
     setView(mode);
     overview(mode);
   };
@@ -186,14 +187,13 @@ export default function VenueMap() {
   // ---- keyboard shortcuts (match the Devcon-style hints) --------------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) {
         if (e.key === 'Escape') setPanel(null);
         return;
       }
       if (e.key === 'f' || e.key === 'F') { e.preventDefault(); setPanel(p => (p === 'find' ? null : 'find')); }
       else if (e.key === '/') { e.preventDefault(); setPanel('search'); }
       else if (e.key === 'r' || e.key === 'R') setShowRoute(s => !s);
-      else if (e.key === 't' || e.key === 'T') switchView(view === 'top' ? '3d' : 'top');
       else if (e.key === 'Escape') { setPanel(null); setSelectedId(null); overview(); }
     };
     window.addEventListener('keydown', onKey);
@@ -227,7 +227,7 @@ export default function VenueMap() {
   }, [query]);
 
   return (
-    <div className={styles.stage}>
+    <div className={styles.stage} data-holo={holoOn ? 'true' : 'false'}>
       <Canvas
         shadows
         flat // no tone mapping, so scene colours match the GMC tokens
@@ -246,12 +246,12 @@ export default function VenueMap() {
           planFocus={planState}
           onPickBridge={id => setPlanState({ layer: 'bridges', bridge: id, open: true })}
           showRoute={showRoute}
-          onSelect={id => select(id, true)}
+          onSelect={id => holoOn ? select(null) : select(id, true)}
         />
       </Canvas>
 
       {/* Map labels, positioned over the 3D scene by LabelProjector */}
-      <div className={`${styles.labels} ${holoOn ? styles.labelsDim : ''}`}>
+      <div className={`${styles.labels} ${selectedId ? styles.labelsFocused : ''} ${holoOn ? styles.labelsDim : ''}`}>
         {/* A place showing its hologram hides its label, which would sit under the dial. */}
         {places.filter(p => !(holoOn && p.id === selectedId)).map(p => (
           <MapLabel
@@ -269,9 +269,7 @@ export default function VenueMap() {
       {/* Header */}
       <header className={styles.header}>
         <div className={styles.brand}>
-          <span className={styles.logoTile}>
-            <Image src="/gmc-logo-light.svg" alt="Gelephu Mindfulness City logo" width={34} height={34} unoptimized priority />
-          </span>
+          <GmcLogo />
           <div>
             <span className={styles.eyebrow}>Gelephu Mindfulness City</span>
             <strong>Experience Centre Map</strong>
@@ -283,14 +281,13 @@ export default function VenueMap() {
       <p className={styles.hints}>
         <span className={styles.hintMouse}>Drag rotates · Right-drag pans · Scroll zooms</span>
         <span className={styles.hintTouch}>Swipe pans · Two fingers rotate · Pinch zooms</span>
-        <span className={styles.hintKeys}><kbd>F</kbd> Find <kbd>/</kbd> Search <kbd>R</kbd> Route <kbd>T</kbd> Top view <kbd>Esc</kbd> Reset</span>
+        <span className={styles.hintKeys}><kbd>F</kbd> Find <kbd>/</kbd> Search <kbd>R</kbd> Route <kbd>Esc</kbd> Reset</span>
       </p>
       )}
 
       {/* View controls */}
       <div className={styles.viewRail} role="group" aria-label="View">
-        <button type="button" className={view === '3d' ? styles.on : ''} onClick={() => switchView('3d')}>3D</button>
-        <button type="button" className={view === 'top' ? styles.on : ''} onClick={() => switchView('top')}>Top</button>
+        <button type="button" className={view === '3d' ? styles.on : ''} onClick={() => switchView('3d')} disabled={holoOn} title={holoOn ? 'Tap outside the hologram to change the map view' : '3D view'}>3D</button>
         <button type="button" className={showRoute ? styles.on : ''} onClick={() => setShowRoute(s => !s)} aria-pressed={showRoute}>Route</button>
         <button type="button" onClick={() => { setSelectedId(null); overview(); }}>Reset</button>
       </div>
@@ -350,7 +347,7 @@ export default function VenueMap() {
         <button type="button" className={panel === 'find' ? styles.dockOn : ''} onClick={() => setPanel(p => (p === 'find' ? null : 'find'))}>☰ Find</button>
       </div>
 
-      <PageNav back={backToMindu} />
+      <PageNav back={backToMindu} variant="map" />
 
       {/* Place card, or the richer Chamber 3 panel */}
       {selected && (() => {
@@ -358,8 +355,8 @@ export default function VenueMap() {
           <>
             {selected.id !== 'fire-exit' && (
               currentId === selected.id
-                ? <span className={styles.hereTag}>● You are here</span>
-                : <button type="button" className={styles.primary} onClick={() => markHere(selected.id)}>I’m here</button>
+                ? <span className={styles.hereTag}><LocationIcon /> You are here</span>
+                : <button type="button" className={styles.locationAction} onClick={() => markHere(selected.id)}><LocationIcon /> I’m here</button>
             )}
             {nextStop && nextStop !== selected.id && (
               <button type="button" className={styles.secondary} onClick={goNext}>Next chamber →</button>
@@ -380,7 +377,7 @@ export default function VenueMap() {
         if (holoOn && selected.feature === 'avatar') return <HoloAvatar key={selected.id} {...holoProps} />;
         if (holoOn && selected.feature === 'souvenir') return <HoloSouvenir key={selected.id} {...holoProps} />;
         if (holoOn && selected.feature === 'welcome') {
-          return <HoloWelcome key={selected.id} {...holoProps} onStart={() => select('chamber1', true)} />;
+          return <HoloWelcome key={selected.id} {...holoProps} />;
         }
         if (holoOn && selected.feature === 'masterplan') {
           return <HoloMasterplan key={selected.id} {...holoProps} state={planState} onChange={setPlanState} />;
@@ -401,7 +398,6 @@ export default function VenueMap() {
 
         return (
           <article className={styles.card} aria-live="polite">
-            <button type="button" className={styles.cardClose} onClick={() => setSelectedId(null)} aria-label="Close">×</button>
             <div className={styles.cardHead}>
               <span className={`${styles.cardBadge} ${styles[`tone_${selected.category}`]}`}>
                 <PlaceGlyph place={selected} fallback={selected.category === 'access' ? '→' : '✦'} />
@@ -443,7 +439,7 @@ function MapLabel({ place, selected, current, visited, onSelect, refCallback }: 
   onSelect: () => void; refCallback: (el: HTMLButtonElement | null) => void;
 }) {
   const kind = place.category === 'access' ? styles.badgeAccess : place.category === 'chamber' ? styles.badgeChamber : styles.badgeService;
-  const glyph = <PlaceGlyph place={place} fallback={place.id === 'ai' ? '✦' : place.id === 'postcard' ? '✉' : place.id === 'fire-exit' ? '!' : '→'} />;
+  const glyph = <PlaceGlyph place={place} fallback={place.id === 'ai' ? '✦' : place.id === 'fire-exit' ? '!' : '→'} />;
   return (
     <button
       ref={refCallback}
@@ -451,9 +447,10 @@ function MapLabel({ place, selected, current, visited, onSelect, refCallback }: 
       className={[styles.label, selected && styles.labelSelected, current && styles.labelCurrent].filter(Boolean).join(' ')}
       onClick={onSelect}
       aria-label={`${place.name}${visited ? ', visited' : ''}${current ? ', you are here' : ''}`}
+      aria-current={current ? 'location' : undefined}
     >
       <span className={styles.labelInner}>
-        <span className={`${styles.badge} ${kind}`}>{visited && place.category === 'chamber' ? '✓' : glyph}</span>
+        <span className={`${styles.badge} ${kind}`}>{current ? <LocationIcon size={18} /> : visited && place.category === 'chamber' ? '✓' : glyph}</span>
         <span className={styles.labelText}>{place.name}</span>
         {current && <span className={styles.here}>You are here</span>}
       </span>

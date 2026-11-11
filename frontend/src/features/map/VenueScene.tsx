@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, type RefObject } from 'react';
+import { useLayoutEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import { CameraControls, CameraControlsImpl, Edges, Line } from '@react-three/drei';
 import * as THREE from 'three';
@@ -8,6 +8,7 @@ import { floorZones, pillars, places, rails, route, screens, walls, type Place, 
 import { extrudeFootprint, ringGeometry, stripGeometry, toWorld, wallGeometry, worldXYZ } from './geometry';
 import { screenTexture, wallTexture } from './textures';
 import { sceneTheme as T, zoneColors } from './theme';
+import { Surroundings } from './Surroundings';
 import { MasterplanHolo, type PlanFocus } from './MasterplanHolo';
 
 const WALL_HEIGHT = 1.6;
@@ -38,8 +39,9 @@ export function VenueScene({ controlsRef, theme, selectedId, holoId, labelRefs, 
   const { ACTION } = CameraControlsImpl;
   return (
     <>
-      <color key={`bg-${theme}`} attach="background" args={[T.background]} />
-      <fog key={`fog-${theme}`} attach="fog" args={[T.background, 120, 220]} />
+      <color key={`bg-${theme}`} attach="background" args={[T.horizon]} />
+      {/* Fades the far landscape and the foothills into the horizon colour. */}
+      <fog key={`fog-${theme}`} attach="fog" args={[T.horizon, 110, 320]} />
       {/* Diffuse light is divided by π, so ~3 total keeps top faces at their token colour. */}
       <ambientLight intensity={1.35} />
       <hemisphereLight key={`sky-${theme}`} args={['#ffffff', T.ground, 0.85]} />
@@ -58,8 +60,9 @@ export function VenueScene({ controlsRef, theme, selectedId, holoId, labelRefs, 
       <CameraControls
         ref={controlsRef}
         makeDefault
+        enabled={!holoId}
         minDistance={10}
-        maxDistance={140}
+        maxDistance={220}
         maxPolarAngle={Math.PI / 2.3}
         smoothTime={0.35}
         mouseButtons={{ left: ACTION.ROTATE, middle: ACTION.DOLLY, right: ACTION.TRUCK, wheel: ACTION.DOLLY }}
@@ -67,33 +70,37 @@ export function VenueScene({ controlsRef, theme, selectedId, holoId, labelRefs, 
       />
 
       <group key={theme}>
+      <MutedContext muted={!!selectedId} refreshKey={`${theme}:${showRoute}`}>
+        <Surroundings />
+        <NeutralFloors />
+        <Walls />
+        <Screens litRooms={litRooms} />
+        <Furniture />
+        {showRoute && <RouteLine />}
+      </MutedContext>
       <Ground onMiss={() => onSelect(null)} />
-      <NeutralFloors />
       {places.filter(p => p.zone).map(p => (
         <Zone key={p.id} place={p} selected={selectedId === p.id} dimmed={!!selectedId && selectedId !== p.id} onSelect={onSelect} />
       ))}
-      <Walls />
-      <Screens litRooms={litRooms} />
       {places.filter(p => p.feature === 'vision').map(p => (
         <ButterLamp3D key={p.id} at={p.holoAt ?? p.anchor} lit={litRooms.has(p.id)} />
       ))}
       {places.filter(p => p.feature === 'avatar').map(p => (
         <AvatarStand key={p.id} at={p.holoAt ?? p.anchor} height={p.holoBase ?? 1} />
       ))}
-      <Furniture />
-      {showRoute && <RouteLine />}
       {places.filter(p => p.feature).map(p => (
         <HoloBeam key={p.id} at={p.holoAt ?? p.anchor} base={p.holoBase ?? 1.02} top={p.holoHeight ?? HOLO_HEIGHT} active={holoId === p.id} />
       ))}
       {places.filter(p => p.feature === 'masterplan').map(p => (
-        <MasterplanHolo
-          key={p.id}
-          position={worldXYZ(p.holoAt ?? p.anchor, (p.holoHeight ?? HOLO_HEIGHT) + 0.25)}
-          scale={1.15}
-          active={holoId === p.id}
-          focus={planFocus}
-          onPickBridge={onPickBridge}
-        />
+        <group key={p.id} onClick={holoId === p.id ? event => event.stopPropagation() : undefined}>
+          <MasterplanHolo
+            position={worldXYZ(p.holoAt ?? p.anchor, (p.holoHeight ?? HOLO_HEIGHT) + 0.25)}
+            scale={1.3}
+            active={holoId === p.id}
+            focus={planFocus}
+            onPickBridge={onPickBridge}
+          />
+        </group>
       ))}
       </group>
       <LabelProjector labelRefs={labelRefs} />
@@ -101,13 +108,40 @@ export function VenueScene({ controlsRef, theme, selectedId, holoId, labelRefs, 
   );
 }
 
+/** Tint the context without dimming the selected floor or its hologram. */
+function MutedContext({ muted, refreshKey, children }: { muted: boolean; refreshKey: string; children: ReactNode }) {
+  const ref = useRef<THREE.Group>(null);
+  useLayoutEffect(() => {
+    if (!muted || !ref.current) return;
+    const restore: (() => void)[] = [];
+    const tint = new THREE.Color(T.dimTo);
+    ref.current.traverse(object => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.material) return;
+      const original = mesh.material;
+      const originals = Array.isArray(original) ? original : [original];
+      const copies = originals.map(material => {
+        const copy = material.clone() as THREE.Material & { color?: THREE.Color; emissive?: THREE.Color };
+        copy.color?.lerp(tint, 0.65);
+        copy.emissive?.multiplyScalar(0.2);
+        return copy;
+      });
+      mesh.material = Array.isArray(original) ? copies : copies[0];
+      restore.push(() => { mesh.material = original; copies.forEach(material => material.dispose()); });
+    });
+    return () => restore.forEach(reset => reset());
+  }, [muted, refreshKey]);
+  return <group ref={ref}>{children}</group>;
+}
+
 function Ground({ onMiss }: { onMiss: () => void }) {
   return (
     <group>
-      {/* Unlit, so the ground matches the page background exactly. */}
-      <mesh rotation-x={-Math.PI / 2} position-y={-0.33} onClick={e => isClick(e) && onMiss()}>
-        <planeGeometry args={[400, 400]} />
-        <meshBasicMaterial color={T.background} />
+      {/* Below the landscape island (Surroundings.tsx): the misty "table" it stands on,
+          and the click target for deselecting (clicks pass through the landscape). */}
+      <mesh rotation-x={-Math.PI / 2} position-y={-3.2} onClick={e => isClick(e) && onMiss()}>
+        <planeGeometry args={[700, 700]} />
+        <meshBasicMaterial color={T.horizon} />
       </mesh>
       {/* Catches only the building's shadow. */}
       <mesh rotation-x={-Math.PI / 2} position-y={-0.32} receiveShadow>
@@ -141,7 +175,7 @@ function Zone({ place, selected, dimmed, onSelect }: { place: Place; selected: b
 
   const base = zoneColors[place.id] ?? T.floor;
   const color = new THREE.Color(base);
-  if (dimmed) color.lerp(new THREE.Color(T.dimTo), 0.55);
+  if (dimmed) color.lerp(new THREE.Color(T.dimTo), 0.8);
 
   return (
     <mesh
@@ -153,8 +187,8 @@ function Zone({ place, selected, dimmed, onSelect }: { place: Place; selected: b
       onPointerOver={e => { e.stopPropagation(); document.body.style.cursor = 'pointer'; }}
       onPointerOut={() => { document.body.style.cursor = ''; }}
     >
-      <meshStandardMaterial color={color} emissive={base} emissiveIntensity={selected ? 0.35 : 0} />
-      <Edges color={selected ? T.outlineSelected : OUTLINE} threshold={20} />
+      <meshStandardMaterial color={color} emissive={base} emissiveIntensity={selected ? 0.45 : 0} />
+      <Edges color={selected ? T.outlineSelected : dimmed ? new THREE.Color(OUTLINE).lerp(new THREE.Color(T.dimTo), 0.75) : OUTLINE} threshold={20} />
     </mesh>
   );
 }
@@ -444,11 +478,26 @@ function LabelProjector({ labelRefs }: { labelRefs: RefObject<Map<string, HTMLEl
       let x = ((v.x + 1) / 2) * size.width;
       let y = ((1 - v.y) / 2) * size.height;
       if (clamp) {
+        let top = size.width <= 720 ? 196 : 70;
+        let bottom = size.height - 12;
+        if (size.width <= 720 && el.dataset.fitPanel === 'true') {
+          // Fit the complete wheel above the real sheet, not behind it. Use the
+          // actual toolbar/sheet bounds so browser chrome and safe areas count.
+          const host = el.parentElement;
+          const hostTop = host?.getBoundingClientRect().top ?? 0;
+          const toolbar = host?.querySelector<HTMLElement>('[aria-label="View"]');
+          const panel = host?.querySelector<HTMLElement>('[data-chamber-panel]');
+          top = toolbar ? toolbar.getBoundingClientRect().bottom - hostTop + 16 : 148;
+          bottom = panel ? panel.getBoundingClientRect().top - hostTop - 16 : bottom;
+          const heading = el.querySelector('header')?.offsetHeight ?? 48;
+          const room = `${Math.max(104, bottom - top - heading - 12)}px`;
+          if (el.style.getPropertyValue('--sector-room') !== room) el.style.setProperty('--sector-room', room);
+        }
         const hw = el.offsetWidth / 2 + 12, hh = el.offsetHeight / 2 + 12;
         x = Math.min(Math.max(x, hw), size.width - hw);
-        // Stay below the header (and, on phones, the view buttons under it).
-        const top = size.width < 720 ? 196 : 70;
-        y = Math.min(Math.max(y, hh + top), size.height - hh);
+        const minY = hh + top;
+        const maxY = bottom - hh;
+        y = maxY < minY ? (top + bottom) / 2 : Math.min(Math.max(y, minY), maxY);
         el.style.visibility = v.z > 1 ? 'hidden' : 'visible';
       } else {
         const hidden = v.z > 1 || Math.abs(v.x) > 1.2 || Math.abs(v.y) > 1.2;

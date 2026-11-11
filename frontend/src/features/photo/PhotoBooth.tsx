@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { PageNav } from '@/components/PageNav';
-import Image from 'next/image';
+import { GmcLogo } from '@/components/GmcLogo';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SHOTS_PER_CHAMBER, chambers, isChamber, type Chamber } from './chambers';
 import { buildCollection } from './compose';
@@ -135,11 +135,6 @@ function Hub({ shots, loaded, focus, picked, onPick, onShoot, onBuild, onStartOv
   const active = chambers.find(c => c.id === activeId) ?? chambers[0];
   const photos = urls[active.id] ?? [];
 
-  const tabsRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    tabsRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
-  }, [activeId]);
-
   const [saving, setSaving] = useState(false);
   const saveChamberCard = async () => {
     const blobs = shots[active.id];
@@ -161,9 +156,7 @@ function Hub({ shots, loaded, focus, picked, onPick, onShoot, onBuild, onStartOv
   return (
     <div className={styles.hub}>
       <header className={styles.hubHead}>
-        <span className={styles.logoTile}>
-          <Image src="/gmc-logo-light.svg" alt="" width={30} height={30} unoptimized />
-        </span>
+        <GmcLogo />
       </header>
 
       <div className={styles.intro}>
@@ -175,7 +168,7 @@ function Hub({ shots, loaded, focus, picked, onPick, onShoot, onBuild, onStartOv
         <p>Take {SHOTS_PER_CHAMBER} photos in each chamber. We put them together into one collection, ready to share.</p>
       </div>
 
-      <div className={styles.tabs} role="tablist" aria-label="Chambers" ref={tabsRef}>
+      <div className={styles.tabs} role="tablist" aria-label="Chambers">
         {chambers.map(c => {
           const done = (shots[c.id]?.length ?? 0) >= SHOTS_PER_CHAMBER;
           const on = c.id === active.id;
@@ -189,7 +182,7 @@ function Hub({ shots, loaded, focus, picked, onPick, onShoot, onBuild, onStartOv
               onClick={() => onPick(c.id)}
             >
               <span className={`${styles.tabNum} ${done ? styles.tabDone : ''}`}>{done ? '✓' : c.number}</span>
-              {c.name}
+              <span className={styles.tabText}>{c.name}</span>
             </button>
           );
         })}
@@ -237,27 +230,28 @@ function Hub({ shots, loaded, focus, picked, onPick, onShoot, onBuild, onStartOv
             <button type="button" className={styles.ghostBtn} onClick={() => onShoot(active)} disabled={!loaded}>↻ Retake all</button>
           </div>
         )}
-      </section>
-
       <div className={styles.bottomBar}>
         <div className={styles.bottomInner}>
           <div className={styles.bottomInfo}>
-            <span className={styles.chamberNum}>{active.number}</span>
             <div>
-              <strong>Chamber {pad2(active.number)}</strong>
-              <small>{Math.round((photos.length / SHOTS_PER_CHAMBER) * 100)}% complete · {doneCount}/{chambers.length} chambers</small>
+              <strong>Collection progress</strong>
+              <small>{doneCount} of {chambers.length} chambers complete</small>
             </div>
           </div>
           {photoCount > 0 && <button type="button" className={styles.linkBtn} onClick={onStartOver}>Start over</button>}
+          <div className={styles.collectionProgress} role="progressbar" aria-label="Photo collection progress" aria-valuemin={0} aria-valuemax={total} aria-valuenow={photoCount}>
+            <span style={{ width: `${photoCount / total * 100}%` }} />
+          </div>
           <button
             type="button"
             className={styles.primaryBtn}
             onClick={onBuild}
             disabled={!doneCount}
             title={doneCount ? 'Build and save your collection' : 'Shoot a chamber first'}
-          >✦ Make collection</button>
+          >{doneCount ? 'Make my collection' : 'Complete a chamber to make your collection'}</button>
         </div>
       </div>
+      </section>
     </div>
   );
 }
@@ -268,6 +262,7 @@ function Shoot({ chamber, single, onDone, onCancel }: { chamber: Chamber; single
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewRef = useRef<HTMLCanvasElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const cameraFileRef = useRef<HTMLInputElement>(null);
   const [frameId, setFrameId] = useState(loadFramePref);
   const [assets, setAssets] = useState<Assets | null>(null);
   const [facing, setFacing] = useState<'user' | 'environment'>('user');
@@ -275,7 +270,12 @@ function Shoot({ chamber, single, onDone, onCancel }: { chamber: Chamber; single
   const [kept, setKept] = useState<Blob[]>([]);
   const [pending, setPending] = useState<{ blob: Blob; url: string } | null>(null);
   const [count, setCount] = useState<number | null>(null);
+  const [timerEnabled, setTimerEnabled] = useState(true);
   const [flash, setFlash] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const [captureError, setCaptureError] = useState('');
+  const [processing, setProcessing] = useState(false);
+  const [cameraAttempt, setCameraAttempt] = useState(0);
   // Retaking one photo keeps its number (and frame text) from the original set.
   const shotNo = single !== undefined ? single + 1 : Math.min(kept.length + 1, SHOTS_PER_CHAMBER);
   const needed = single !== undefined ? 1 : SHOTS_PER_CHAMBER;
@@ -286,21 +286,33 @@ function Shoot({ chamber, single, onDone, onCancel }: { chamber: Chamber; single
     let cancelled = false;
     (async () => {
       try {
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error('No camera API');
+        if (!window.isSecureContext) throw new Error('For a live preview, open this site over HTTPS. You can still take a photo using your phone camera below.');
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error('Live camera preview is unavailable in this browser. Take a photo or choose one below.');
         stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1920 } },
           audio: false,
         });
         if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
         const v = videoRef.current;
-        if (v) { v.srcObject = stream; await v.play().catch(() => {}); }
+        if (!v) return;
+        v.srcObject = stream;
+        await v.play();
+        if (cancelled) return;
         setCamState('on');
-      } catch {
-        if (!cancelled) setCamState('error');
+      } catch (error) {
+        stream?.getTracks().forEach(t => t.stop());
+        if (!cancelled) {
+          setCamState('error');
+          setCameraError(error instanceof Error && error.name === 'NotAllowedError'
+            ? 'Camera access was denied. Allow it in your browser and retry, or take a photo below.'
+            : error instanceof Error && error.name === 'NotReadableError'
+              ? 'Your camera is busy. Close other camera apps and retry, or choose a photo below.'
+              : error instanceof Error ? error.message : 'We couldn’t open the camera. Take a photo or choose one below.');
+        }
       }
     })();
     return () => { cancelled = true; stream?.getTracks().forEach(t => t.stop()); };
-  }, [facing]);
+  }, [facing, cameraAttempt]);
 
   useEffect(() => { prepareFrames().then(setAssets); }, []);
 
@@ -324,7 +336,7 @@ function Shoot({ chamber, single, onDone, onCancel }: { chamber: Chamber; single
       const live = camState === 'on' && v && v.videoWidth;
       renderFramed(ctx, c.width, c.height, frame, info, assets,
         live ? { src: v, w: v.videoWidth, h: v.videoHeight, mirror: facing === 'user' } : null);
-      if (live) raf = requestAnimationFrame(tick);
+      if (camState === 'on') raf = requestAnimationFrame(tick);
     };
     tick();
     return () => cancelAnimationFrame(raf);
@@ -344,10 +356,14 @@ function Shoot({ chamber, single, onDone, onCancel }: { chamber: Chamber; single
 
   const snap = useCallback(async () => {
     const v = videoRef.current;
-    if (!v || !v.videoWidth) return;
+    if (!v || !v.videoWidth) { setCaptureError('The camera is not ready yet. Please try again.'); return; }
+    setCaptureError('');
+    setProcessing(true);
     setFlash(true);
     setTimeout(() => setFlash(false), 250);
-    await render(v, v.videoWidth, v.videoHeight, facing === 'user');
+    try { await render(v, v.videoWidth, v.videoHeight, facing === 'user'); }
+    catch { setCaptureError('We couldn’t prepare this photo. Please try again.'); }
+    finally { setProcessing(false); }
   }, [facing, render]);
 
   // 3-2-1 countdown, then take the photo
@@ -355,18 +371,23 @@ function Shoot({ chamber, single, onDone, onCancel }: { chamber: Chamber; single
     if (count === null) return;
     const t = setTimeout(() => {
       if (count <= 1) { setCount(null); snap(); } else setCount(count - 1);
-    }, 800);
+    }, 1000);
     return () => clearTimeout(t);
   }, [count, snap]);
 
   const onFile = async (file: File | undefined) => {
     if (!file) return;
+    setCaptureError('');
+    setProcessing(true);
     const url = URL.createObjectURL(file);
     try {
       const img = await loadImage(url);
       await render(img, img.naturalWidth, img.naturalHeight, false);
+    } catch {
+      setCaptureError('This image could not be opened. Try a JPEG or PNG photo.');
     } finally {
       URL.revokeObjectURL(url);
+      setProcessing(false);
     }
   };
 
@@ -386,10 +407,12 @@ function Shoot({ chamber, single, onDone, onCancel }: { chamber: Chamber; single
         <button
           type="button"
           className={styles.barBtn}
-          onClick={() => { setCamState('starting'); setFacing(f => (f === 'user' ? 'environment' : 'user')); }}
-          disabled={camState !== 'on' || !!pending}
-          aria-label="Switch camera"
-        >⟲ Flip</button>
+          onClick={() => setTimerEnabled(enabled => !enabled)}
+          disabled={camState !== 'on' || !!pending || count !== null || processing}
+          aria-label="3-second photo timer"
+          aria-pressed={timerEnabled}
+          title="Timer for the live camera"
+        >Timer {timerEnabled ? '3s' : 'off'}</button>
       </div>
 
       <div className={styles.viewfinder}>
@@ -399,14 +422,25 @@ function Shoot({ chamber, single, onDone, onCancel }: { chamber: Chamber; single
         {pending && <img src={pending.url} alt="Your photo" className={styles.review} />}
         {count !== null && count > 0 && <span key={count} className={styles.count}>{count}</span>}
         {flash && <span className={styles.flash} />}
-        {camState === 'starting' && !pending && <p className={styles.camMsg}>Starting camera…</p>}
-        {camState === 'error' && !pending && (
+        {camState === 'starting' && !pending && (
           <div className={styles.camMsg}>
-            <p>We couldn’t open the camera. Allow camera access in your browser, or pick a photo instead.</p>
+            <p>Waiting for camera access. Allow the camera in your browser, or take a photo below.</p>
+            <button type="button" className={styles.primaryBtn} onClick={() => cameraFileRef.current?.click()}>Take a photo</button>
             <button type="button" className={styles.primaryBtn} onClick={() => fileRef.current?.click()}>Choose a photo</button>
           </div>
         )}
+        {camState === 'error' && !pending && (
+          <div className={styles.camMsg}>
+            <p>{cameraError}</p>
+            <button type="button" className={styles.primaryBtn} onClick={() => cameraFileRef.current?.click()}>Take a photo</button>
+            <button type="button" className={styles.primaryBtn} onClick={() => fileRef.current?.click()}>Choose a photo</button>
+            <button type="button" className={styles.ghostBtnDark} onClick={() => { setCamState('starting'); setCameraAttempt(n => n + 1); }}>Retry live camera</button>
+          </div>
+        )}
       </div>
+
+      {captureError && <p className={styles.note} role="alert">{captureError}</p>}
+      {processing && <p className={styles.note} role="status">Preparing photo…</p>}
 
       <FramePicker
         assets={assets}
@@ -436,15 +470,40 @@ function Shoot({ chamber, single, onDone, onCancel }: { chamber: Chamber; single
             <button
               type="button"
               className={styles.shutter}
-              onClick={() => setCount(3)}
-              disabled={camState !== 'on' || count !== null}
+              onClick={() => {
+                if (camState !== 'on') cameraFileRef.current?.click();
+                else if (timerEnabled) setCount(3);
+                else void snap();
+              }}
+              disabled={camState === 'starting' || count !== null || processing}
               aria-label="Take photo"
             />
-            <span className={styles.ctrlSpacer} />
+            <button
+              type="button"
+              className={styles.switchCamera}
+              onClick={() => { setCamState('starting'); setFacing(f => (f === 'user' ? 'environment' : 'user')); }}
+              disabled={camState !== 'on' || count !== null || processing}
+              aria-label="Switch camera"
+              title="Switch camera"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 7h3l2-3h6l2 3h3v13H4z" />
+                <path d="M8 12a4 4 0 0 1 7-1l1 1m0-3v3h-3M16 16a4 4 0 0 1-7 1l-1-1m0 3v-3h3" />
+              </svg>
+            </button>
           </>
         )}
       </div>
 
+      <input
+        ref={cameraFileRef}
+        type="file"
+        accept="image/*"
+        capture={facing}
+        aria-label="Take a photo with your device camera"
+        hidden
+        onChange={e => { onFile(e.target.files?.[0]); e.target.value = ''; }}
+      />
       <input
         ref={fileRef}
         type="file"
@@ -545,7 +604,7 @@ function Result({ shots, onBack }: { shots: Record<string, Blob[]>; onBack: () =
   return (
     <div className={styles.result}>
       <div className={styles.shootBar}>
-        <button type="button" className={styles.barBtn} onClick={onBack}>← Back</button>
+        <button type="button" className={styles.barBtn} onClick={onBack}>Back</button>
         <span className={styles.shootTitle}>Your collection</span>
         <span className={styles.ctrlSpacer} />
       </div>

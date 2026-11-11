@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
   <title>GMC Guide</title>
   <script>
     // Light / dark theme: the visitor's choice (saved), otherwise the device setting.
@@ -53,7 +53,6 @@
   <div class="ks-side">
     <button type="button" class="ks-map" aria-label="Open the Experience Centre map" title="Experience Centre map" hidden></button>
     <button type="button" class="ks-map" aria-label="Open the photo collection camera" title="Photo collection" hidden></button>
-    <a href="/briefing">Build my briefing</a>
   </div>
   <script>
     (function () {
@@ -65,6 +64,7 @@
       btn.addEventListener('click', function () { MinduTheme.toggle(); label(); });
     })();
   </script>
+  <script src="/agent/guide/gmc-voice.js"></script>
   <script src="/agent/guide/gmc-guide.js"></script>
   <script src="/agent/kiosk/kiosk.js"></script>
   <script>
@@ -87,7 +87,15 @@
           });
           return { text: data.answer, sources: data.sources };
         },
-        mic: false, // typed questions only (no microphone button)
+        transcribe: async (blob, { signal } = {}) => {
+          const data = await api('/api/transcribe', {
+            signal,
+            method: 'POST',
+            headers: { 'Content-Type': blob.type.split(';')[0] || 'audio/webm' },
+            body: blob,
+          });
+          return data.text;
+        },
         suggestions: ['What is GMC?', 'Who leads GMC?', 'What are the economic sectors?'],
       });
 
@@ -98,7 +106,7 @@
       return window.guide;
     }
 
-    // Kiosk flow: logo splash → QR / continue as guest → chat.
+    // Kiosk flow: scan QR → paired phone → shared GMC chat experience.
     MinduKiosk.start({
       intro: document.getElementById('intro'),
       guide: document.getElementById('guide'),
