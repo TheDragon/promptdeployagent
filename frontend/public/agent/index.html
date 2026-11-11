@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GMC Guide</title>
+  <script>
+    // Light / dark theme: the visitor's choice (saved), otherwise the device setting.
+    (function () {
+      var KEY = 'mindu-theme', saved = null;
+      try { saved = localStorage.getItem(KEY); } catch (e) {}
+      var media = window.matchMedia('(prefers-color-scheme: dark)');
+      var apply = function (t) { document.documentElement.dataset.theme = t; };
+      apply(saved === 'light' || saved === 'dark' ? saved : (media.matches ? 'dark' : 'light'));
+      media.addEventListener('change', function (e) {
+        var s = null; try { s = localStorage.getItem(KEY); } catch (err) {}
+        if (!s) apply(e.matches ? 'dark' : 'light');
+      });
+      window.MinduTheme = {
+        toggle: function () {
+          var next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+          apply(next);
+          try { localStorage.setItem(KEY, next); } catch (e) {}
+          return next;
+        },
+      };
+    })();
+  </script>
+  <link rel="stylesheet" href="/agent/guide/gmc-guide.css" />
+  <link rel="stylesheet" href="/agent/kiosk/kiosk.css" />
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px 16px;
+      box-sizing: border-box;
+      background: #faf7f0;
+    }
+    :root[data-theme="dark"] body { background: #12172a; }
+    body { transition: background 0.3s; }
+  </style>
+</head>
+<body>
+  <div id="intro" hidden></div>
+  <main id="guide" hidden></main>
+  <button type="button" class="ks-theme" aria-label="Switch to dark mode" title="Light / dark mode">
+    <svg class="ks-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg>
+    <svg class="ks-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+  </button>
+  <button type="button" class="ks-restart" hidden>↺ Start over</button>
+  <div class="ks-side">
+    <button type="button" class="ks-map" aria-label="Open the Experience Centre map" title="Experience Centre map" hidden></button>
+    <button type="button" class="ks-map" aria-label="Open the photo collection camera" title="Photo collection" hidden></button>
+    <a href="/briefing">Build my briefing</a>
+  </div>
+  <script>
+    (function () {
+      var btn = document.querySelector('.ks-theme');
+      var label = function () {
+        btn.setAttribute('aria-label', document.documentElement.dataset.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
+      };
+      label();
+      btn.addEventListener('click', function () { MinduTheme.toggle(); label(); });
+    })();
+  </script>
+  <script src="/agent/guide/gmc-guide.js"></script>
+  <script src="/agent/kiosk/kiosk.js"></script>
+  <script>
+    // Mindu's answers come from the GMC AI backend (backend/), proxied at /api by the Next.js app (frontend/next.config.ts).
+    async function api(path, init) {
+      const res = await fetch(path, init);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { userMessage: data.error });
+      return data;
+    }
+
+    function mountGuide(el, extra) {
+      window.guide = MinduGuide.mount(el, {
+        ...extra,
+        answer: async (question, history) => {
+          const data = await api('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question, history, chamberId: 'reception', audience: 'general' }),
+          });
+          return { text: data.answer, sources: data.sources };
+        },
+        mic: false, // typed questions only (no microphone button)
+        suggestions: ['What is GMC?', 'Who leads GMC?', 'What are the economic sectors?'],
+      });
+
+      // Which brain is connected goes to the console only (not shown to visitors).
+      api('/api/health')
+        .then((h) => { if (h.mode !== 'live-ai') console.warn('Mindu: demo mode — add OPENAI_API_KEY to the root .env'); })
+        .catch(() => console.warn('Mindu: AI backend offline'));
+      return window.guide;
+    }
+
+    // Kiosk flow: logo splash → QR / continue as guest → chat.
+    MinduKiosk.start({
+      intro: document.getElementById('intro'),
+      guide: document.getElementById('guide'),
+      restart: document.querySelector('.ks-restart'),
+      // The map and the photo collection are pages of this same Next.js app.
+      links: [
+        { id: 'map', button: document.querySelectorAll('.ks-map')[0], url: '/map', label: 'Opening the Experience Centre map…' },
+        { id: 'photo', button: document.querySelectorAll('.ks-map')[1], url: '/photo', label: 'Opening the camera…' },
+      ],
+      mountGuide,
+    });
+  </script>
+</body>
+</html>
